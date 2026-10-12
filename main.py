@@ -1,201 +1,158 @@
-from openpyxl import load_workbook
-import time
-import sys
+import math
 import msvcrt
-
+import sys
+import time
+from pathlib import Path
+from openpyxl import load_workbook
 
 FILE_PATH = "Spreadsheet Jun.xlsx"
 
 
-def load_tasks(file_path):
-    tasks = []
-
+def to_float(value, default=None):
     try:
-        workbook = load_workbook(file_path)
-        sheet = workbook.active
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
-        if sheet.cell(row=1, column=3).value is None:
-            sheet.cell(row=1, column=3).value = "Hours Tracked"
-
-        for row in range(2, sheet.max_row + 1):
-            task = sheet.cell(row=row, column=1).value
-            hours_budgeted = sheet.cell(row=row, column=2).value
-            hours_tracked = sheet.cell(row=row, column=3).value
+def clock(seconds):
+    h, rem = divmod(int(seconds), 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-            if task is None or str(task).strip() == "":
-                continue
-
-
-            if hours_budgeted is None or str(hours_budgeted).strip() == "":
-                continue
-
-            try:
-                hours_budgeted = float(hours_budgeted)
-            except (ValueError, TypeError):
-                continue
-
-
-            if hours_budgeted <= 0:
-                continue
-
-
-            try:
-                hours_tracked = float(hours_tracked)
-            except (ValueError, TypeError):
-                hours_tracked = 0.0
-
-            tasks.append({
-                "row": row,
-                "task": str(task).strip(),
-                "hours_budgeted": hours_budgeted,
-                "hours_tracked": hours_tracked
-            })
-
-        workbook.close()
-
+def load_tasks(path):
+    try:
+        wb = load_workbook(path)
     except FileNotFoundError:
-        print(f"Could not find '{file_path}'.")
+        print(f"Could not find '{path}'.")
         return []
 
+    tasks = []
+    rows = wb.active.iter_rows(min_row=2, max_col=3, values_only=True)
+    for row_num, (name, budget, tracked) in enumerate(rows, start=2):
+        budget = to_float(budget)
+        if not name or not str(name).strip() or not budget or budget <= 0:
+            continue
+        tasks.append({
+            "row": row_num,
+            "task": str(name).strip(),
+            "budgeted": budget,
+            "tracked": to_float(tracked, 0.0),
+        })
+
+    wb.close()
     return tasks
 
 
-def save_tasks(file_path, tasks):
+def save_tasks(path, tasks):
     try:
-        workbook = load_workbook(file_path)
-        sheet = workbook.active
-
+        wb = load_workbook(path)
+        sheet = wb.active
         sheet.cell(row=1, column=3).value = "Hours Tracked"
-
-        for task in tasks:
-            sheet.cell(
-                row=task["row"],
-                column=3
-            ).value = task["hours_tracked"]
-
-        workbook.save(file_path)
-        workbook.close()
-
-        print("\nHours saved successfully.")
-
+        for t in tasks:
+            sheet.cell(row=t["row"], column=3).value = t["tracked"]
+        wb.save(path)
+        wb.close()
+        print("Saved.")
     except PermissionError:
-        print(
-            "\nCould not save the file. "
-            "Make sure the Excel file is closed."
-        )
-
+        print("Couldn't save. Is the Excel file still open?")
     except Exception as e:
-        print(f"\nCould not save the file: {e}")
-
-
-def select_task(tasks):
-    print("\n=== Tasks ===")
-
-    for i, task in enumerate(tasks, start=1):
-        print(
-            f"{i}. {task['task']} "
-            f"({task['hours_tracked']:.2f} / "
-            f"{task['hours_budgeted']:.2f} hours)"
-        )
-
-    print("0. Exit")
-
-    while True:
-        choice = input("\nSelect a task: ")
-
-        try:
-            choice = int(choice)
-
-            if choice == 0:
-                return None
-
-            if 1 <= choice <= len(tasks):
-                selected_task = tasks[choice - 1]
-
-                print(f"\nSelected: {selected_task['task']}")
-
-                return selected_task
-
-            print(
-                f"Please enter a number between "
-                f"0 and {len(tasks)}."
-            )
-
-        except ValueError:
-            print("Please enter a number.")
+        print(f"Couldn't save: {e}")
 
 
 def run_timer(task):
     print(f"\nWorking on: {task['task']}")
-    input("Press ENTER to start the timer...")
+    input("Press ENTER to start...")
 
-    start_time = time.time()
-
-    print("\nTimer started.")
-    print("Press ENTER to stop the timer.")
+    start = time.time()
+    print("Timer running. Press ENTER to stop.")
 
     while True:
-        elapsed_seconds = time.time() - start_time
-
-        hours = int(elapsed_seconds // 3600)
-        minutes = int((elapsed_seconds % 3600) // 60)
-        seconds = int(elapsed_seconds % 60)
-
-        sys.stdout.write(
-            f"\rElapsed: {hours:02d}:{minutes:02d}:{seconds:02d}"
-        )
+        sys.stdout.write(f"\rElapsed: {clock(time.time() - start)}")
         sys.stdout.flush()
-
-        if msvcrt.kbhit():
-            key = msvcrt.getch()
-
-            if key == b'\r':
-                break
-
+        if msvcrt.kbhit() and msvcrt.getch() == b"\r":
+            break
         time.sleep(0.1)
 
-    end_time = time.time()
+    hours = (time.time() - start) / 3600
+    print(f"\nTime worked: {hours:.2f} hours")
+    return hours
 
-    elapsed_seconds = end_time - start_time
-    elapsed_hours = elapsed_seconds / 3600
 
-    hours = int(elapsed_seconds // 3600)
-    minutes = int((elapsed_seconds % 3600) // 60)
-    seconds = int(elapsed_seconds % 60)
+def adjust_hours(task):
+    print(f"\nCurrently tracked: {task['tracked']:.2f} hours")
 
-    print()
-    print(f"Time worked: {elapsed_hours:.2f} hours")
+    while True:
+        raw = input("Hours to add or subtract (0 to cancel): ")
+        amount = to_float(raw)
 
-    return elapsed_hours
+        if amount is None or not math.isfinite(amount):
+            print("Enter a valid number.")
+            continue
+        if amount == 0:
+            return False
+        if task["tracked"] + amount < 0:
+            print("Tracked hours can't go below zero.")
+            continue
+
+        task["tracked"] += amount
+        return True
+
+
+def task_menu(task):
+    """Returns True if the task's hours changed."""
+    while True:
+        print(f"\n=== {task['task']} ===")
+        print(f"Tracked:  {task['tracked']:.2f}")
+        print(f"Budgeted: {task['budgeted']:.2f}")
+        print("\n1. Start timer\n2. Adjust hours\n3. Back")
+
+        choice = input("> ").strip()
+        if choice == "1":
+            task["tracked"] += run_timer(task)
+            return True
+        if choice == "2":
+            return adjust_hours(task)
+        if choice == "3":
+            return False
+        print("Pick 1, 2, or 3.")
+
+
+def select_task(tasks):
+    print("\n=== Tasks ===")
+    for i, t in enumerate(tasks, start=1):
+        print(f"{i}. {t['task']} ({t['tracked']:.2f} / {t['budgeted']:.2f} hrs)")
+    print("0. Exit")
+
+    while True:
+        try:
+            choice = int(input("> "))
+        except ValueError:
+            print("Enter a number.")
+            continue
+
+        if choice == 0:
+            return None
+        if 1 <= choice <= len(tasks):
+            return tasks[choice - 1]
+        print(f"Enter a number from 0 to {len(tasks)}.")
 
 
 def main():
     tasks = load_tasks(FILE_PATH)
-
     if not tasks:
         print("No valid tasks found.")
         return
 
     while True:
-        selected_task = select_task(tasks)
-
-        if selected_task is None:
-            print("\nGoodbye!")
+        task = select_task(tasks)
+        if task is None:
             break
 
-        hours_worked = run_timer(selected_task)
-
-        selected_task["hours_tracked"] += hours_worked
-
-        print(
-            f"{selected_task['task']} now has "
-            f"{selected_task['hours_tracked']:.2f} "
-            f"hours tracked."
-        )
-
-        save_tasks(FILE_PATH, tasks)
+        if task_menu(task):
+            print(f"{task['task']}: {task['tracked']:.2f} hours tracked.")
+            save_tasks(FILE_PATH, tasks)
 
 
 if __name__ == "__main__":
